@@ -115,6 +115,7 @@ void * requestHandler(void * arg)
 
 void sendFile( int sockfd, std::string file)
 {
+								char httpHeader[30] = "HTTP/1.1 200 OK\r\n";
 								char currentTime[70];
 								char modifiedTime[70];
 								char contentHeader[50];
