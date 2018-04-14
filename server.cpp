@@ -12,6 +12,9 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <sys/types.h>
+	#include <sys/stat.h>
+	#include <time.h>
 
 #define MAX_REQUEST_SIZE 5000
 
@@ -19,6 +22,7 @@ void * requestHandler(void * arg);
 void parse_arguments(int argc, char* argv[], int *port, std::string *docroot, std::string *logfile);
 int isGetRequest(std::string firstLine, std::string * file);
 std::vector<std::string> splitLine(std::string line, char delimitor);
+void sendFile( int sockfd, std::string file);
 
 /*----------------------------------------------------*/
 /*TO CONNECT and issue a GET REQUEST: type into address bar:  http://localhost:8080/test.txt */
@@ -28,6 +32,7 @@ std::vector<std::string> splitLine(std::string line, char delimitor);
 int port = 8080;
 std::string docroot = ".";
 std::string logfile = "output.txt";
+char notImplementedError[30] = "HTTP/1.1 501 Not Implemented";
 
 int main(int argc, char * argv[]) {
 								int sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -92,6 +97,13 @@ void * requestHandler(void * arg)
 																								if(isGetRequest(linesInRequest[0], &requestedFile))
 																								{
 																																std::cout << "GET Request for file " << requestedFile << '\n';
+																																//TODO:check if this file is in our directory before we send
+																																sendFile(sockfd,requestedFile);
+																								}
+																								else
+																								{
+																																std::cout << "Not a GET request" << '\n';
+																																send(sockfd, notImplementedError,sizeof(notImplementedError)+1,0);
 																								}
 																								puts("---------------------------------------------------------");
 																								printf("%s",request);
@@ -99,6 +111,42 @@ void * requestHandler(void * arg)
 																}
 								}
 								return 0;
+}
+
+void sendFile( int sockfd, std::string file)
+{
+								char currentTime[70];
+								char modifiedTime[70];
+								char contentHeader[50];
+								std::string fileType;
+								time_t rawtime;
+
+								time ( &rawtime );
+
+								//format current time in http response format
+								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
+								printf("%s", currentTime);
+
+								//get file info
+								struct stat result;
+								stat(file.c_str(), &result);
+
+								//format modified time in http response format
+								strftime(modifiedTime, sizeof(modifiedTime), "Last-Modified: %a, %d %b %Y %H:%M:%S %Z\r\n", gmtime(&result.st_mtime));
+								printf("%s",modifiedTime);
+
+								fileType = file.substr(file.find_last_of(".") + 1);
+								if(fileType.compare("html"))
+																strcpy(contentHeader, "Content-Type: text/html\r\n");
+								else if(fileType.compare("txt"))
+																strcpy(contentHeader, "Content-Type: text/plain\r\n");
+								else if(fileType.compare("jpg"))
+																strcpy(contentHeader, "Content-Type: image/jpg\r\n");
+								else if(fileType.compare("pdf"))
+																strcpy(contentHeader, "Content-Type: application/pdf\r\n");
+								printf("%s",contentHeader);
+
+
 }
 
 int isGetRequest(std::string firstLine, std::string * file)
