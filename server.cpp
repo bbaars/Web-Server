@@ -15,6 +15,7 @@
 #include <sys/types.h>
 	#include <sys/stat.h>
 	#include <time.h>
+	#include <sys/sendfile.h>
 
 #define MAX_REQUEST_SIZE 5000
 
@@ -23,6 +24,7 @@ void parse_arguments(int argc, char* argv[], int *port, std::string *docroot, st
 int isGetRequest(std::string firstLine, std::string * file);
 std::vector<std::string> splitLine(std::string line, char delimitor);
 void sendFile( int sockfd, std::string file);
+void sendNotImplmented(int sock);
 
 /*----------------------------------------------------*/
 /*TO CONNECT and issue a GET REQUEST: type into address bar:  http://localhost:8080/test.txt */
@@ -32,7 +34,7 @@ void sendFile( int sockfd, std::string file);
 int port = 8080;
 std::string docroot = ".";
 std::string logfile = "output.txt";
-char notImplementedError[40] = "HTTP/1.1 501 Not Implemented\r\n";
+char notImplementedError[50] = "HTTP/1.1 501 Not Implemented\r\n";
 char invalidRequest[40] = "HTTP/1.1 404 Not Found\r\n";
 char notModified[40] = "HTTP/1.1 304 Not Modified\r\n";
 
@@ -90,6 +92,7 @@ void * requestHandler(void * arg)
 																int n;
 																if ((n = recv(sockfd, request, MAX_REQUEST_SIZE, 0)) > 0)
 																{
+																								printf("request: %s\n",request );
 
 																								std::vector<std::string> linesInRequest;
 																								//Split up request line by line
@@ -104,33 +107,75 @@ void * requestHandler(void * arg)
 
 																								//TODO:close connection if no messages in 20 seconds
 
+																								puts("----------------------REQUEST---------------------------");
+																								printf("%s",request);
+																								puts("---------------------------------------------------------");
+
 																								//see if GET request
 																								if(isGetRequest(linesInRequest[0], &requestedFile))
 																								{
 																																std::cout << "GET Request for file " << requestedFile << '\n';
 																																//TODO:check if this file is in our directory before we send
 																																//if its not send 404 response, status line is in invalidRequest[]
-																																//Note that a 404 response has a body: you must include the error page to be displayed on the client.
-																																//I pushed a very basic 404 page to send
+
 																																puts("------------------RESPONSE HEADER------------------------");
 																																sendFile(sockfd,requestedFile);
 																																puts("---------------------------------------------------------");
 																								}
 																								else
 																								{
-																																std::cout << "Not a GET request" << '\n';
-																																//TODO:Send 501 response, notImplementedError[] has correct status line
+																																sendNotImplmented(sockfd);
+
+
 																								}
 																								//TODO:open log file, log request to file, close log file
 																								//MUST BE THREAD SAFE
-																								puts("----------------------REQUEST---------------------------");
-																								printf("%s",request);
-																								puts("---------------------------------------------------------");
+
 																}
 								}
 								return 0;
 }
+void sendCantFindError(int sockfd)
+{
+								char contentHeader[50];
+								char contentLength[30];
+								char currentTime[70];
+								char messageHeader[200];
+								time_t rawtime;
+								FILE* rfd;
+								struct stat result;
+								int sendBytes=0;
 
+								time ( &rawtime );
+
+								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
+
+								stat("404.html", &result);
+								strcpy(contentHeader, "Content-Type: text/html\r\n");
+								sprintf(contentLength,"Content-Length: %d\r\n",result.st_size);
+								sprintf(messageHeader,"%s%s%s%s\r\n",invalidRequest,currentTime,contentHeader,contentLength);
+								printf(messageHeader);
+								send(sockfd,messageHeader, strlen(messageHeader),0);
+								rfd = fopen("404.html","rb");
+
+								sendBytes = sendfile (sockfd, fileno(rfd), 0, result.st_size);
+								std::cout << "Bytes sent:" << sendBytes<< '\n';
+
+}
+void sendNotImplmented(int sock)
+{
+								char contentLength[30];
+								char currentTime[70];
+								char messageHeader[200];
+								time_t rawtime;
+
+								time ( &rawtime );
+
+								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
+								sprintf(contentLength,"Content-Length: %d\r\n",0);
+								sprintf(messageHeader,"%s%s%s\r\n",notImplementedError,currentTime,contentLength);
+								send(sock,messageHeader, strlen(messageHeader),0);
+}
 void sendFile( int sockfd, std::string file)
 {
 								char httpHeader[30] = "HTTP/1.1 200 OK\r\n";
@@ -138,47 +183,65 @@ void sendFile( int sockfd, std::string file)
 								char modifiedTime[70];
 								char contentHeader[50];
 								char contentLength[30];
-								char messageHeader[250];
+								char messageHeader[200];
+								char line[1024];
+
+								int sendBytes=0;
 								std::string fileType;
 								time_t rawtime;
-
+								FILE* rfd;
+								struct stat result;
 								time ( &rawtime );
 
 								//format current time in http response format
 								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
 								//	printf("%s", currentTime);
 
-								//get file info
-								struct stat result;
-								stat(file.c_str(), &result);
 
-								//format modified time in http response format
-								strftime(modifiedTime, sizeof(modifiedTime), "Last-Modified: %a, %d %b %Y %H:%M:%S %Z\r\n", gmtime(&result.st_mtime));
-								//	printf("%s",modifiedTime);
+								rfd = fopen(file.c_str(),"rb");
+								if(rfd == NULL)
+								{
+																sendCantFindError(sockfd);
+								}
+								else{
+																//get file info
 
-								fileType = file.substr(file.find_last_of(".") + 1);
-								if(fileType.compare("html"))
-																strcpy(contentHeader, "Content-Type: text/html\r\n");
-								else if(fileType.compare("txt"))
-																strcpy(contentHeader, "Content-Type: text/plain\r\n");
-								else if(fileType.compare("jpg"))
-																strcpy(contentHeader, "Content-Type: image/jpg\r\n");
-								else if(fileType.compare("pdf"))
-																strcpy(contentHeader, "Content-Type: application/pdf\r\n");
-								//printf("%s",contentHeader);
+																stat(file.c_str(), &result);
 
-								sprintf(contentLength,"Content-Length: %d\r\n",result.st_size);
-								//printf("%s", contentLength);
+																//format modified time in http response format
+																strftime(modifiedTime, sizeof(modifiedTime), "Last-Modified: %a, %d %b %Y %H:%M:%S %Z\r\n", gmtime(&result.st_mtime));
+																//	printf("%s",modifiedTime);
 
-								sprintf(messageHeader,"%s%s%s%s%s\r\n",httpHeader,currentTime,contentHeader,contentLength,modifiedTime);
-								printf(messageHeader);
+																fileType = file.substr(file.find_last_of(".") + 1);
+																std::cout << "FileType:" << fileType << '\n';
+																if(!fileType.compare("html"))
+																								strcpy(contentHeader, "Content-Type: text/html\r\n");
+																if(!fileType.compare("txt"))
+																								strcpy(contentHeader, "Content-Type: text/plain; charset=UTF-8\r\n");
+																if(!fileType.compare("jpg"))
+																								strcpy(contentHeader, "Content-Type: image/jpeg\r\n");
+																if(!fileType.compare("pdf"))
+																								strcpy(contentHeader, "Content-Type: application/pdf\r\n");
+																//printf("%s",contentHeader);
 
-								//TODO:open log file, log messageHeader to file, close log file
-								//MUST BE THREAD SAFE
+																sprintf(contentLength,"Content-Length: %d\r\n",result.st_size);
+																//printf("%s", contentLength);
 
+																sprintf(messageHeader,"%s%s%s%s%s\r\n",httpHeader,currentTime,contentHeader,contentLength,modifiedTime);
+																printf(messageHeader);
 
-								//TODO:Actually send file
+																//TODO:open log file, log messageHeader to file, close log file
+																//MUST BE THREAD SAFE
+																printf("Send header\n" );
+																send(sockfd,messageHeader, strlen(messageHeader),0);
 
+																printf("Open file\n" );
+																rfd = fopen(file.c_str(),"rb");
+
+																sendBytes = sendfile (sockfd, fileno(rfd), 0, result.st_size);
+																std::cout << "Bytes sent:" << sendBytes<< '\n';
+																fclose(rfd);
+								}
 }
 
 int isGetRequest(std::string firstLine, std::string * file)
