@@ -25,6 +25,7 @@ int isGetRequest(std::string firstLine, std::string * file);
 std::vector<std::string> splitLine(std::string line, char delimitor);
 void sendFile( int sockfd, std::string file);
 void sendNotImplmented(int sock);
+void logFile(char* logMessage);
 
 /*----------------------------------------------------*/
 /*TO CONNECT and issue a GET REQUEST: type into address bar:  http://localhost:8080/test.txt */
@@ -37,6 +38,9 @@ std::string logfile = "output.txt";
 char notImplementedError[50] = "HTTP/1.1 501 Not Implemented\r\n";
 char invalidRequest[40] = "HTTP/1.1 404 Not Found\r\n";
 char notModified[40] = "HTTP/1.1 304 Not Modified\r\n";
+char requestHeader[] = "----------------------REQUEST---------------------------";
+char responseHeader[] = "----------------------RESPONSE---------------------------";
+char bottomBorder[] = "-------------------------------------------------------";
 
 int main(int argc, char * argv[]) {
 								int sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -107,9 +111,9 @@ void * requestHandler(void * arg)
 
 																								//TODO:close connection if no messages in 20 seconds
 
-																								puts("----------------------REQUEST---------------------------");
-																								printf("%s",request);
-																								puts("---------------------------------------------------------");
+																								logFile(requestHeader);
+																								logFile(request);
+																								logFile(bottomBorder);
 
 																								//see if GET request
 																								if(isGetRequest(linesInRequest[0], &requestedFile))
@@ -118,9 +122,9 @@ void * requestHandler(void * arg)
 																																//TODO:check if this file is in our directory before we send
 																																//if its not send 404 response, status line is in invalidRequest[]
 
-																																puts("------------------RESPONSE HEADER------------------------");
+																																puts(responseHeader);
 																																sendFile(sockfd,requestedFile);
-																																puts("---------------------------------------------------------");
+																																puts(bottomBorder);
 																								}
 																								else
 																								{
@@ -134,6 +138,13 @@ void * requestHandler(void * arg)
 																}
 								}
 								return 0;
+}
+void logFile(char* logMessage)
+{
+								FILE* fp;
+								fp = fopen(logfile.c_str(),"a");
+								fprintf(fp, "%s\n", logMessage);
+								fclose(fp);
 }
 void sendCantFindError(int sockfd)
 {
@@ -154,6 +165,11 @@ void sendCantFindError(int sockfd)
 								strcpy(contentHeader, "Content-Type: text/html\r\n");
 								sprintf(contentLength,"Content-Length: %d\r\n",result.st_size);
 								sprintf(messageHeader,"%s%s%s%s\r\n",invalidRequest,currentTime,contentHeader,contentLength);
+
+								logFile(responseHeader);
+								logFile(messageHeader);
+								logFile(bottomBorder);
+
 								printf(messageHeader);
 								send(sockfd,messageHeader, strlen(messageHeader),0);
 								rfd = fopen("404.html","rb");
@@ -174,6 +190,11 @@ void sendNotImplmented(int sock)
 								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
 								sprintf(contentLength,"Content-Length: %d\r\n",0);
 								sprintf(messageHeader,"%s%s%s\r\n",notImplementedError,currentTime,contentLength);
+
+								logFile(responseHeader);
+								logFile(messageHeader);
+								logFile(bottomBorder);
+
 								send(sock,messageHeader, strlen(messageHeader),0);
 }
 void sendFile( int sockfd, std::string file)
@@ -229,6 +250,10 @@ void sendFile( int sockfd, std::string file)
 
 																sprintf(messageHeader,"%s%s%s%s%s\r\n",httpHeader,currentTime,contentHeader,contentLength,modifiedTime);
 																printf(messageHeader);
+
+																logFile(responseHeader);
+																logFile(messageHeader);
+																logFile(bottomBorder);
 
 																//TODO:open log file, log messageHeader to file, close log file
 																//MUST BE THREAD SAFE
