@@ -16,6 +16,8 @@
 	#include <sys/stat.h>
 	#include <time.h>
 	#include <sys/sendfile.h>
+	#include <ctime>
+	#include <locale>
 
 #define MAX_REQUEST_SIZE 5000
 
@@ -23,6 +25,7 @@ void * requestHandler(void * arg);
 void parse_arguments(int argc, char* argv[], int *port, std::string *docroot, std::string *logfile);
 int isGetRequest(std::string firstLine, std::string * file);
 std::vector<std::string> splitLine(std::string line, char delimitor);
+int hasFileBeenModifiedSince(std::string file, std::string modifiedSinceDate);
 void sendFile( int sockfd, std::string file);
 void sendNotImplmented(int sock);
 void logFile(char* logMessage);
@@ -96,8 +99,10 @@ void * requestHandler(void * arg)
 																int n;
 																if ((n = recv(sockfd, request, MAX_REQUEST_SIZE, 0)) > 0)
 																{
-																								printf("request: %s\n",request );
 
+																								int modifiedByFlag=0;
+																								int fileWasModifiedSince=0;
+																								std::string modifiedBy;
 																								std::vector<std::string> linesInRequest;
 																								//Split up request line by line
 																								linesInRequest = splitLine(std::string(request), '\n');
@@ -118,19 +123,47 @@ void * requestHandler(void * arg)
 																								//see if GET request
 																								if(isGetRequest(linesInRequest[0], &requestedFile))
 																								{
-																																std::cout << "GET Request for file " << requestedFile << '\n';
+																																if(requestedFile.compare("./favicon.ico")!=0)
+																																{
+																																								std::cout << "GET Request for file " << requestedFile << '\n';
+																																								printf("request: %s\n",request );
+																																}
 																																//TODO:check if this file is in our directory before we send
 																																//if its not send 404 response, status line is in invalidRequest[]
+																																std::size_t found;
 
-																																puts(responseHeader);
-																																sendFile(sockfd,requestedFile);
-																																puts(bottomBorder);
+																																//see if if-modified-since header is in request
+																																found=std::string(request).find("If-Modified-Since:");
+																																//if it is, extract modified date
+																																if (found!=std::string::npos)
+																																{
+																																								modifiedBy = std::string(request).substr(std::string(request).find("If-Modified-Since:") + 19);
+																																								modifiedByFlag=1;
+																																}
+
+																																if(modifiedByFlag)
+																																{
+																																								//if file was not modified since the specified date, send 304 response
+																																								if(fileWasModifiedSince = hasFileBeenModifiedSince(requestedFile, modifiedBy))
+																																								{
+																																																//TODO:send 304 response
+																																								}
+																																}
+																																//else, send file
+																																if(!fileWasModifiedSince)
+																																{
+																																								if(requestedFile.compare("./favicon.ico")!=0)
+																																								{
+																																																puts(responseHeader);
+																																																sendFile(sockfd,requestedFile);
+																																																puts(bottomBorder);
+																																								}
+																																}
 																								}
 																								else
 																								{
+																																std::cout << "NOT A GET REQUEST" << '\n';
 																																sendNotImplmented(sockfd);
-
-
 																								}
 																								//TODO:open log file, log request to file, close log file
 																								//MUST BE THREAD SAFE
@@ -138,6 +171,25 @@ void * requestHandler(void * arg)
 																}
 								}
 								return 0;
+}
+int hasFileBeenModifiedSince(std::string file, std::string modifiedSinceDate)
+{
+								std::tm modifiedSince;
+								struct stat result;
+
+								struct tm modifiedTime;
+								strptime(modifiedSinceDate.c_str(), "%a, %d %b %Y %H:%M:%S %Z\r\n", &modifiedTime);
+								time_t modifiedByDate = mktime(&modifiedTime);  // t is now your desired time_t
+
+								stat(file.c_str(), &result);
+								time_t fileModifiedDate = result.st_mtime;
+
+								double seconds = difftime(fileModifiedDate, modifiedByDate);
+
+								if(seconds>0)
+																return 1;
+								else
+																return 0;
 }
 void logFile(char* logMessage)
 {
@@ -178,6 +230,27 @@ void sendCantFindError(int sockfd)
 								std::cout << "Bytes sent:" << sendBytes<< '\n';
 
 }
+
+void sendNotModified(int sock)
+{
+								char contentLength[30];
+								char currentTime[70];
+								char messageHeader[200];
+								time_t rawtime;
+
+								time ( &rawtime );
+
+								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
+								sprintf(contentLength,"Content-Length: %d\r\n",0);
+								sprintf(messageHeader,"%s%s%s\r\n",notImplementedError,currentTime,contentLength);
+
+								logFile(responseHeader);
+								logFile(messageHeader);
+								logFile(bottomBorder);
+
+								send(sock,messageHeader, strlen(messageHeader),0);
+}
+
 void sendNotImplmented(int sock)
 {
 								char contentLength[30];
@@ -190,6 +263,10 @@ void sendNotImplmented(int sock)
 								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
 								sprintf(contentLength,"Content-Length: %d\r\n",0);
 								sprintf(messageHeader,"%s%s%s\r\n",notImplementedError,currentTime,contentLength);
+
+								printf("---------------------RESPONSE------------------------\n");
+								printf(messageHeader);
+								printf("-----------------------------------------------------\n");
 
 								logFile(responseHeader);
 								logFile(messageHeader);
@@ -218,21 +295,23 @@ void sendFile( int sockfd, std::string file)
 								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
 								//	printf("%s", currentTime);
 
-
+								//try and open file requested
 								rfd = fopen(file.c_str(),"rb");
+								//if not found, send 404 response
 								if(rfd == NULL)
 								{
 																sendCantFindError(sockfd);
 								}
+								//if found
 								else{
 																//get file info
-
 																stat(file.c_str(), &result);
 
 																//format modified time in http response format
 																strftime(modifiedTime, sizeof(modifiedTime), "Last-Modified: %a, %d %b %Y %H:%M:%S %Z\r\n", gmtime(&result.st_mtime));
 																//	printf("%s",modifiedTime);
 
+																//get file type and set content type
 																fileType = file.substr(file.find_last_of(".") + 1);
 																std::cout << "FileType:" << fileType << '\n';
 																if(!fileType.compare("html"))
