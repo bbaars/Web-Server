@@ -60,6 +60,11 @@ int main(int argc, char * argv[])
     std::cout << "Root Directory:   " << docroot << std::endl;
     std::cout << "Log File:         " << logfile << std::endl;
 
+	struct timeval timeout;
+  	timeout.tv_sec = 20;
+  	timeout.tv_usec = 0;
+  	setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
 
     struct sockaddr_in serveraddr,clientaddr;
     serveraddr.sin_family = AF_INET;
@@ -74,10 +79,10 @@ int main(int argc, char * argv[])
 
         unsigned int len = sizeof(clientaddr);
         int clientSocket = accept(sockfd, (struct sockaddr*)&clientaddr, &len);
-        std::cout << "Client Accepted " << '\n';
 
         if (clientSocket > 0 )
         {
+			std::cout << "Client Accepted " << '\n';
             // Create separate thread to handle this request.
             pthread_t requestHandlerThread;
             pthread_create(&requestHandlerThread, NULL, requestHandler, &clientSocket);
@@ -99,7 +104,7 @@ void * requestHandler(void * arg)
         char request[MAX_REQUEST_SIZE];
         std::string requestedFile;
 
-
+		
         int n;
         if ((n = recv(sockfd, request, MAX_REQUEST_SIZE, 0)) > 0)
         {
@@ -173,6 +178,11 @@ void * requestHandler(void * arg)
             //MUST BE THREAD SAFE
 
         }
+		else
+		{
+			std::cout << "\n20 Second Timeout, closing connection\n";
+			return 0;
+		}
     }
     return 0;
 }
