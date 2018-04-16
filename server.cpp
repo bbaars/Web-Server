@@ -253,26 +253,34 @@ void sendNotModified(int sock)
 
 void sendNotImplmented(int sock)
 {
+								char contentHeader[50];
 								char contentLength[30];
 								char currentTime[70];
 								char messageHeader[200];
 								time_t rawtime;
+								FILE* rfd;
+								struct stat result;
+								int sendBytes=0;
 
 								time ( &rawtime );
 
 								strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
-								sprintf(contentLength,"Content-Length: %d\r\n",0);
-								sprintf(messageHeader,"%s%s%s\r\n",notImplementedError,currentTime,contentLength);
 
-								printf("---------------------RESPONSE------------------------\n");
-								printf(messageHeader);
-								printf("-----------------------------------------------------\n");
+								stat("501.html", &result);
+								strcpy(contentHeader, "Content-Type: text/html\r\n");
+								sprintf(contentLength,"Content-Length: %d\r\n",result.st_size);
+								sprintf(messageHeader,"%s%s%s%s\r\n",notImplementedError,currentTime,contentHeader,contentLength);
 
 								logFile(responseHeader);
 								logFile(messageHeader);
 								logFile(bottomBorder);
 
+								printf(messageHeader);
 								send(sock,messageHeader, strlen(messageHeader),0);
+								rfd = fopen("501.html","rb");
+
+								sendBytes = sendfile (sock, fileno(rfd), 0, result.st_size);
+								std::cout << "Bytes sent:" << sendBytes<< '\n';
 }
 void sendFile( int sockfd, std::string file)
 {
