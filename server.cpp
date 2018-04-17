@@ -1,3 +1,11 @@
+/*
+ * @authors: Brandon Baars, Mike Ford, Isaac Benson
+ * @date: 03/15/2018
+ * @description: CIS 457 Project 4: Mini HTTP Server
+ *
+ */
+
+
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -28,6 +36,7 @@ std::vector<std::string> splitLine(std::string line, char delimitor);
 int hasFileBeenModifiedSince(std::string file, std::string modifiedSinceDate);
 void sendFile( int sockfd, std::string file);
 void sendNotImplmented(int sock);
+void sendNotModified(int sock);
 void logFile(char* logMessage);
 
 /*----------------------------------------------------*/
@@ -38,6 +47,8 @@ void logFile(char* logMessage);
 int port = 8080;
 std::string docroot = ".";
 std::string logfile = "";
+
+/*HTTP Headers*/
 char notImplementedError[50] = "HTTP/1.1 501 Not Implemented\r\n";
 char invalidRequest[40] = "HTTP/1.1 404 Not Found\r\n";
 char notModified[40] = "HTTP/1.1 304 Not Modified\r\n";
@@ -45,27 +56,29 @@ char requestHeader[] = "----------------------REQUEST---------------------------
 char responseHeader[] = "----------------------RESPONSE---------------------------";
 char bottomBorder[] = "-------------------------------------------------------";
 
-/*Mutex to protect shared memory*/
+/*Mutex to protect output file from multiple writers*/
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int main(int argc, char * argv[])
 {
+	/*Initialize socket*/
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
 
-
+	/*Parse argv[] and set port, root directory, and log file if they are specified*/
     parse_arguments(argc, argv, &port, &docroot, &logfile);
 
     std::cout << "Port:             " << port << std::endl;
     std::cout << "Root Directory:   " << docroot << std::endl;
     std::cout << "Log File:         " << logfile << std::endl;
 
-	struct timeval timeout;
-  	timeout.tv_sec = 20;
-  	timeout.tv_usec = 0;
-  	setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+	/*Set 20 second timeout for the socket*/
+    struct timeval timeout;
+    timeout.tv_sec = 20;
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-
+	/*Set up server*/
     struct sockaddr_in serveraddr,clientaddr;
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_port = htons(port);
@@ -74,15 +87,16 @@ int main(int argc, char * argv[])
     bind(sockfd, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
     listen(sockfd, 10);
 
+	
     while(1)
     {
-
+		/*If a client connects, start up a thread*/
         unsigned int len = sizeof(clientaddr);
         int clientSocket = accept(sockfd, (struct sockaddr*)&clientaddr, &len);
 
         if (clientSocket > 0 )
         {
-			std::cout << "Client Accepted " << '\n';
+            std::cout << "Client Accepted " << '\n';
             // Create separate thread to handle this request.
             pthread_t requestHandlerThread;
             pthread_create(&requestHandlerThread, NULL, requestHandler, &clientSocket);
@@ -104,7 +118,7 @@ void * requestHandler(void * arg)
         char request[MAX_REQUEST_SIZE];
         std::string requestedFile;
 
-		
+
         int n;
         if ((n = recv(sockfd, request, MAX_REQUEST_SIZE, 0)) > 0)
         {
@@ -146,20 +160,19 @@ void * requestHandler(void * arg)
                 //if it is, extract modified date
                 if (found!=std::string::npos)
                 {
-                    modifiedBy = std::string(request).substr(std::string(request).find("If-Modified-Since:") + 19);
-                    modifiedByFlag=1;
-                }
+                    modifiedBy = std::string(request).substr(std::string(request).find("If-Modified-Since:") + 19,29);
 
-                if(modifiedByFlag)
-                {
-                    //if file was not modified since the specified date, send 304 response
-                    if(fileWasModifiedSince = hasFileBeenModifiedSince(requestedFile, modifiedBy))
+                    fileWasModifiedSince = hasFileBeenModifiedSince(requestedFile, modifiedBy);
+                    if(!fileWasModifiedSince)
                     {
-                        //TODO:send 304 response
+                        sendNotModified(sockfd);
                     }
                 }
-                //else, send file
-                if(!fileWasModifiedSince)
+
+
+                //if is-modified-since header was found and file has been modified since, send file
+                //or if is-modified-since header was not found at all, send normally
+                if(fileWasModifiedSince || (found==std::string::npos))
                 {
                     if(requestedFile.compare("./favicon.ico")!=0)
                     {
@@ -178,46 +191,51 @@ void * requestHandler(void * arg)
             //MUST BE THREAD SAFE
 
         }
-		else
-		{
-			std::cout << "\n20 Second Timeout, closing connection\n";
-			return 0;
-		}
+        else
+        {
+            std::cout << "\n20 Second Timeout, closing connection\n";
+            return 0;
+        }
     }
     return 0;
 }
-int hasFileBeenModifiedSince(std::string file, std::string modifiedSinceDate)
+int hasFileBeenModifiedSince(std::string file, std::string headerDateString)
 {
-    std::tm modifiedSince;
-    struct stat result;
+    struct tm tmHeaderDateString;
+    time_t tmHeaderDateStringRawTime;
+    struct stat fileInfo;
 
-    struct tm modifiedTime;
-    strptime(modifiedSinceDate.c_str(), "%a, %d %b %Y %H:%M:%S %Z\r\n", &modifiedTime);
-    time_t modifiedByDate = mktime(&modifiedTime);  // t is now your desired time_t
+    struct tm AFTERtmHeaderDateString;
+    std::cout << headerDateString << '\n';
 
-    stat(file.c_str(), &result);
-    time_t fileModifiedDate = result.st_mtime;
+    strptime(headerDateString.c_str(), "%a, %d %b %Y %H:%M:%S", &tmHeaderDateString);
+    tmHeaderDateStringRawTime = mktime(&tmHeaderDateString);
+    //convert header to local time
+    tmHeaderDateStringRawTime -=14400;
 
-    double seconds = difftime(fileModifiedDate, modifiedByDate);
+    stat(file.c_str(), &fileInfo);
 
-    if(seconds>0)
+
+    double secs = difftime(fileInfo.st_mtime, tmHeaderDateStringRawTime);
+
+    if(secs>0)
         return 1;
     else
         return 0;
 }
 void logFile(char* logMessage)
 {
-	/*If a logfile was specified with the -logfile flag, write to the logfile*/
-	if (logfile.compare("") != 0)
-	{
-		/*Use a mutex to prevent multiple threads writing at the same time*/
-		pthread_mutex_lock(&mutex);
-    	FILE* fp;
-    	fp = fopen(logfile.c_str(),"a");
-    	fprintf(fp, "%s\n", logMessage);
-    	fclose(fp);
-		pthread_mutex_unlock(&mutex);
-	}
+    /*If a logfile was specified with the -logfile flag, write to the logfile*/
+    if (logfile.compare("") != 0)
+    {
+        /*Use a mutex to prevent multiple threads writing at the same time*/
+        pthread_mutex_lock(&mutex);
+        FILE* fp;
+        fp = fopen(logfile.c_str(),"a");
+        fprintf(fp, "%s\n", logMessage);
+        fclose(fp);
+        pthread_mutex_unlock(&mutex);
+    }
 }
 void sendCantFindError(int sockfd)
 {
@@ -263,7 +281,9 @@ void sendNotModified(int sock)
 
     strftime(currentTime, sizeof(currentTime), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n",  gmtime ( &rawtime ));
     sprintf(contentLength,"Content-Length: %d\r\n",0);
-    sprintf(messageHeader,"%s%s%s\r\n",notImplementedError,currentTime,contentLength);
+    sprintf(messageHeader,"%s%s%s\r\n",notModified,currentTime,contentLength);
+
+    printf("%s", messageHeader);
 
     logFile(responseHeader);
     logFile(messageHeader);
